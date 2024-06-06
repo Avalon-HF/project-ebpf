@@ -1,0 +1,24 @@
+[package]
+name = "projectebpf-common"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+user = ["aya"]
+
+[dependencies]
+aya = { version = "0.12", optional = true }
+aya-ebpf = "0.1.0"
+aya-ebpf-bindings = "0.1.0"
+network-types = "0.0.5"
+
+
+[build-dependencies]
+aya-tool = { git = "https://github.com/aya-rs/aya" }
+
+
+[lib]
+path = "src/lib.rs"
+
+
