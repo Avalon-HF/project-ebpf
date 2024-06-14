@@ -24,13 +24,15 @@ fn main() {
         "task_struct",
         "trace_event_raw_kfree_skb",
     ];
-    // let bindings = aya_tool::generate(
-    //     InputFile::Btf(PathBuf::from("/sys/kernel/btf/vmlinux")),
-    //     &names,
-    //     &[],
-    // )
-    // .unwrap();
 
+    #[cfg(target_os = "linux")]
+    let bindings = aya_tool::generate(
+        InputFile::Btf(PathBuf::from("/sys/kernel/btf/vmlinux")),
+        &names,
+        &[],
+    )
+    .unwrap();
+    #[cfg(not(target_os="linux"))]
     let bindings = aya_tool::generate(
         InputFile::Header(PathBuf::from("src/vmlinux.h")),
         &names,

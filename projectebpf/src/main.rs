@@ -90,8 +90,15 @@ async fn main() -> Result<(), anyhow::Error> {
             Program::PerfEvent(_) => todo!(),
             Program::RawTracePoint(_) => todo!(),
             Program::Lsm(_) => todo!(),
-            Program::BtfTracePoint(_) => {
-                // let btf = Btf::from_sys_fs()?;
+            Program::BtfTracePoint(tp) => {
+                // let btf = aya::Btf::from_sys_fs().unwrap();
+                // if name == "projectebpf" {
+                //     // tp.attach("syscalls", "sys_exit_mmap")?;
+                // } else if name == "btf_kfree_skb" {
+                //     info!("load btf_kfree_skb");
+                //     tp.load("kfree_skb", &btf).unwrap();
+                //     tp.attach().unwrap();
+                // }
                 // let program: &mut BtfTracePoint = bpf.program_mut("{{tracepoint_name}}").unwrap().try_into()?;
                 // program.load("{{tracepoint_name}}", &btf)?;
                 // program.attach()?;

@@ -219,7 +219,7 @@ fn try_kfree_skb(ctx: TracePointContext) -> Result<u32, ()> {
 
 
 fn btf_try_kfree_skb(ctx: BtfTracePointContext) -> Result<u32, ()> {
-    // info!(&ctx, "kernal function kfree_skb called");
+    info!(&ctx, "kernal function kfree_skb called");
     let pid = ctx.pid();
     let tgid = ctx.tgid();
     // let command=ctx.command().unwrap_or_default();
@@ -227,13 +227,13 @@ fn btf_try_kfree_skb(ctx: BtfTracePointContext) -> Result<u32, ()> {
         .as_ptr()
         .cast::<projectebpf_common::vmlinux::trace_event_raw_kfree_skb>();
     // unsafe {
-    let trace_kfree = unsafe { raw.read() };
+    let trace_kfree = unsafe { bpf_probe_read(raw).unwrap() };
     //  let trace_kfree= raw.read();
-    let reason = trace_kfree.reason;
+    // let reason = trace_kfree.reason;
     let sk_buff = trace_kfree
         .skbaddr
         .cast::<projectebpf_common::vmlinux::sk_buff>();
-    let sk_buff = unsafe { sk_buff.read() };
+    let sk_buff = unsafe { bpf_probe_read(sk_buff).unwrap() };
     let headers = unsafe { sk_buff.__bindgen_anon_5.headers.as_ref() };
     let protocol = headers.protocol;
     // 获取 network_header 偏移量
@@ -253,7 +253,7 @@ fn btf_try_kfree_skb(ctx: BtfTracePointContext) -> Result<u32, ()> {
     let mac_header_ptr = unsafe { head.add(mac_header_offset) } as *const EthHdr;
 
     // 读取以太网头部
-    let eth_hdr = unsafe {mac_header_ptr.read()};
+    let eth_hdr = unsafe { bpf_probe_read(mac_header_ptr).unwrap() };
 
     // 根据协议类型处理不同的逻辑
     match eth_hdr.ether_type {
@@ -268,7 +268,7 @@ fn btf_try_kfree_skb(ctx: BtfTracePointContext) -> Result<u32, ()> {
                     unsafe { head.add(network_header_offset) } as *const Ipv4Hdr;
 
                 // 读取 IPv4 头部
-                let ipv4_hdr = unsafe { network_header_ptr.read()};
+                let ipv4_hdr = unsafe { bpf_probe_read(network_header_ptr).unwrap() };
 
                 // 读取数据
                 let data_ptr = sk_buff.data as *mut u8;
@@ -279,7 +279,7 @@ fn btf_try_kfree_skb(ctx: BtfTracePointContext) -> Result<u32, ()> {
                             let transport_head_ptr = transport_head_ptr as *const TcpHdr;
                             unsafe {
                                 (*packet_data).tcp_hdr =
-                                    Some(transport_head_ptr.read());
+                                    Some(bpf_probe_read(transport_head_ptr).unwrap());
                                 (*packet_data).udp_hdr = None;
                             }
                         }
@@ -288,7 +288,7 @@ fn btf_try_kfree_skb(ctx: BtfTracePointContext) -> Result<u32, ()> {
                             unsafe {
                                 (*packet_data).tcp_hdr = None;
                                 (*packet_data).udp_hdr =
-                                    Some(transport_head_ptr.read());
+                                    Some(bpf_probe_read(transport_head_ptr).unwrap());
                             }
                         }
 
@@ -299,12 +299,11 @@ fn btf_try_kfree_skb(ctx: BtfTracePointContext) -> Result<u32, ()> {
                 unsafe {
                     (*packet_data).tgid = tgid;
                     (*packet_data).pid = pid;
-                    (*packet_data).reason = reason;
+                    // (*packet_data).reason = reason;
                     (*packet_data).data_len = data_len;
                     (*packet_data).protocol = protocol;
                     (*packet_data).ipv4_hdr = Some(ipv4_hdr);
                     (*packet_data).ipv6_hdr = None;
-                    // (*packet_data).data=data_ptr.read()
                     bpf_probe_read_buf(data_ptr, (*packet_data).data.as_mut()).unwrap();
                 }
                 entry.submit(0);
@@ -316,7 +315,7 @@ fn btf_try_kfree_skb(ctx: BtfTracePointContext) -> Result<u32, ()> {
             let network_header_ptr = unsafe { head.add(network_header_offset) };
 
             // 处理 IPv6 协议的逻辑
-            let ipv6_hdr = unsafe { (network_header_ptr as *const Ipv6Hdr).read()};
+            let ipv6_hdr = unsafe { bpf_probe_read(network_header_ptr as *const Ipv6Hdr).unwrap() };
             // let src_addr = unsafe { ipv6_hdr.src_addr.in6_u.u6_addr8 };
             // let dst_addr = unsafe { ipv6_hdr.dst_addr.in6_u.u6_addr8 };
             let data_ptr = sk_buff.data as *mut u8;
@@ -325,7 +324,7 @@ fn btf_try_kfree_skb(ctx: BtfTracePointContext) -> Result<u32, ()> {
                 // *entry = mem::MaybeUninit::new(packet_data);
                 unsafe {
                     let packet_data: *mut PacketData = entry.as_mut_ptr();
-                    (*packet_data).reason = reason;
+                    // (*packet_data).reason = reason;
                     (*packet_data).data_len = data_len;
                     (*packet_data).protocol = protocol;
                     (*packet_data).ipv4_hdr = None;
