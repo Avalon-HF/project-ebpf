@@ -2,6 +2,8 @@
 
 pub mod vmlinux;
 
+use core::ffi::c_void;
+
 // use aya_bpf::bindings::bpf_stack_build_id;
 use aya_ebpf_bindings::bindings::bpf_stack_build_id;
 use network_types::{
@@ -35,5 +37,11 @@ pub struct PacketData {
     pub ipv6_hdr: Option<Ipv6Hdr>,
     pub tcp_hdr: Option<TcpHdr>,
     pub udp_hdr: Option<UdpHdr>,
-    pub data: [u8; 1500],
+    // pub data: [u8; 1500],
+}
+
+
+#[allow(improper_ctypes)]
+extern "C" {
+    pub fn btf_read(index: *const c_void) -> *const c_void;
 }

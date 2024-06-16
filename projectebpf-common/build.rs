@@ -1,18 +1,21 @@
 use std::{
     env,
-    fs::{File},
+    fs::File,
     io::Write,
-    path::{Path, PathBuf},
+    path::{Path, PathBuf}, process::Command,
     // process::Command,
 };
 
 use aya_tool::generate::InputFile;
 
 fn main() {
+    env::set_var("RUSTFLAGS", "-Z unstable-options");
     println!("cargo:rerun-if-changed=build.rs");
 
     // let out_dir = env::var("OUT_DIR").unwrap();
-    let out_dir = "src/";
+    let out_dir = "src";
+
+    // let out_dir = env::var("OUT_DIR").unwrap();
     let dest_path = Path::new(&out_dir).join("vmlinux.rs");
 
     let names: Vec<&str> = vec![
@@ -31,14 +34,14 @@ fn main() {
         &names,
         &[],
     )
-    .unwrap();
+        .unwrap();
     #[cfg(not(target_os="linux"))]
     let bindings = aya_tool::generate(
         InputFile::Header(PathBuf::from("src/vmlinux.h")),
         &names,
         &[],
     )
-    .unwrap();
+        .unwrap();
 
     println!("cargo:rerun-if-changed=src/vmlinux.h");
     let mut out = File::create(dest_path).unwrap();
