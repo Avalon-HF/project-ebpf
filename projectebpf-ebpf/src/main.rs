@@ -8,15 +8,17 @@ use aya_ebpf::{
     cty::c_void,
     helpers::{
         bpf_get_current_pid_tgid, bpf_get_stack, bpf_get_stackid, bpf_map_lookup_elem,
-        bpf_map_update_elem, bpf_probe_read, bpf_probe_read_buf, bpf_ringbuf_reserve,
-        bpf_skb_load_bytes_relative,
+        bpf_map_update_elem, bpf_probe_read, bpf_probe_read_buf, bpf_probe_read_kernel,
+        bpf_ringbuf_reserve, bpf_skb_load_bytes_relative,
     },
     macros::{btf_tracepoint, kprobe, map, tracepoint, xdp},
     maps::{stack, stack_trace, Array, HashMap, PerCpuArray, PerfEventArray, RingBuf, StackTrace},
     memcpy,
-    programs::{sk_buff, tp_btf, BtfTracePointContext, ProbeContext, TracePointContext, XdpContext},
+    programs::{
+        sk_buff, tp_btf, BtfTracePointContext, ProbeContext, TracePointContext, XdpContext,
+    },
     EbpfContext, // macros::btf_tracepoint,
-                 // programs::BtfTracePointContext,
+    // programs::BtfTracePointContext,
 };
 use aya_ebpf_bindings::{
     bindings::{__u32, __u64, bpf_stack_build_id, BPF_ANY, BPF_F_USER_BUILD_ID, BPF_F_USER_STACK},
@@ -29,20 +31,21 @@ use network_types::{
     tcp::TcpHdr,
     udp::UdpHdr,
 };
-use projectebpf_common::{vmlinux::trace_entry, PacketData, MAX_STACK_RAWTP};
+use projectebpf_common::{PacketData, MAX_STACK_RAWTP};
+use projectebpf_ebpf::read_sk_buff;
 
-#[tracepoint]
-pub fn projectebpf(ctx: TracePointContext) -> u32 {
-    match try_projectebpf(ctx) {
-        Ok(ret) => ret,
-        Err(ret) => ret,
-    }
-}
+// #[tracepoint]
+// pub fn projectebpf(ctx: TracePointContext) -> u32 {
+//     match try_projectebpf(ctx) {
+//         Ok(ret) => ret,
+//         Err(ret) => ret,
+//     }
+// }
 
 #[map(name = "tcp_drop_ring_map")]
 static mut RINGBUF_MAP: RingBuf = RingBuf::with_byte_size(4096, 0);
 
-#[tracepoint(category = "skb", name = "kfree_skb")]
+#[tracepoint]
 pub fn kfree_skb(ctx: TracePointContext) -> u32 {
     match try_kfree_skb(ctx) {
         Ok(ret) => ret,
@@ -50,13 +53,13 @@ pub fn kfree_skb(ctx: TracePointContext) -> u32 {
     }
 }
 
-#[btf_tracepoint(function = "kfree_skb")]
-pub fn btf_kfree_skb(ctx: BtfTracePointContext) -> u32 {
-    match btf_try_kfree_skb(ctx) {
-        Ok(ret) => ret,
-        Err(_) => 0,
-    }
-}
+// #[btf_tracepoint(function = "kfree_skb")]
+// pub fn btf_kfree_skb(ctx: BtfTracePointContext) -> u32 {
+//     match btf_try_kfree_skb(ctx) {
+//         Ok(ret) => ret,
+//         Err(_) => 0,
+//     }
+// }
 
 #[xdp] //
 pub fn xdp_hello(ctx: XdpContext) -> u32 {
@@ -96,57 +99,80 @@ fn try_kfree_skb(ctx: TracePointContext) -> Result<u32, ()> {
     let raw = ctx
         .as_ptr()
         .cast::<projectebpf_common::vmlinux::trace_event_raw_kfree_skb>();
+
     // unsafe {
+    // let trace_kfree = unsafe { bpf_probe_read(raw).unwrap() };
     let trace_kfree = unsafe { bpf_probe_read(raw).unwrap() };
+
+    // let trace_kfree = unsafe { *raw };
     //  let trace_kfree= raw.read();
     // let reason = trace_kfree.reason;
-    let sk_buff = trace_kfree
-        .skbaddr
-        .cast::<projectebpf_common::vmlinux::sk_buff>();
-    let sk_buff = unsafe { bpf_probe_read(sk_buff).unwrap() };
-    let headers = unsafe { sk_buff.__bindgen_anon_5.headers.as_ref() };
-    let protocol = headers.protocol;
-    // 获取 network_header 偏移量
-    let network_header_offset = headers.network_header as usize;
-    let data_len = sk_buff.data_len;
-    // let mac_header = headers.mac_header;
-    let mac_len = sk_buff.mac_len;
+    unsafe {
+        let sk_buff = trace_kfree.skbaddr
+            .cast::<projectebpf_common::vmlinux::sk_buff>();
 
-    // 获取 head 和 mac_header 偏移量
-    let head = sk_buff.head as *const u8;
-    // let data_porint_len = sk_buff.data as usize - sk_buff.tail as usize;
-    let mac_header_offset = headers.mac_header as usize;
-    let transport_header_offset = headers.transport_header as usize;
+        // let kfree=&trace_kfree;
+        let sk_buff = unsafe { bpf_probe_read(sk_buff).unwrap() };
 
+        // let sk_buff=bpf_probe_read().unwrap();
+        // let sk_buff = bpf_probe_read_kernel(read_sk_buff(raw as *const c_void)).unwrap();
+        // let sk_buff = &*sk_buff;
 
-    // 计算 MAC 头部指针
-    let mac_header_ptr = unsafe { head.add(mac_header_offset) } as *const EthHdr;
+        // let network_header_offset = projectebpf_ebpf::read_sk_buff_mac_head(sk_buff) as usize;
+        // let network_header_offset = projectebpf_ebpf::read_sk_buff_mac_head(sk_buff) as usize;
 
-    // 读取以太网头部
-    let eth_hdr = unsafe { bpf_probe_read(mac_header_ptr).unwrap() };
+        // let sk_buff = unsafe {
+        //     btf_read(sk_buff as *const c_void) as *const projectebpf_common::vmlinux::sk_buff
+        // };
+        // let headers = unsafe { sk_buff.__bindgen_anon_5.headers.as_ref() };
+        let protocol = sk_buff.protocol;
 
-    // 根据协议类型处理不同的逻辑
-    match eth_hdr.ether_type {
-        EtherType::Ipv4 => {
-            info!(&ctx, "kernal This is an IPv4 packet.");
-            if let Some(mut entry) = unsafe { RINGBUF_MAP.reserve::<PacketData>(0) } {
-                // 处理 IPv4 协议的逻辑
-                let packet_data: *mut PacketData = entry.as_mut_ptr();
+        // 获取 network_header 偏移量
+        let network_header_offset = sk_buff.network_header as usize;
 
-                // 计算网络层头部指针
-                let network_header_ptr =
-                    unsafe { head.add(network_header_offset) } as *const Ipv4Hdr;
+        let data_len = sk_buff.data_len;
+        // let mac_header = headers.mac_header;
+        // let mac_len = (*sk_buff).mac_len;
 
-                // 读取 IPv4 头部
-                let ipv4_hdr = unsafe { bpf_probe_read(network_header_ptr).unwrap() };
+        // 获取 head 和 mac_header 偏移量
+        let head = sk_buff.head as *const u8;
+        // let head = *sk_buff.head as *const u8;
+        // let data_porint_len = sk_buff.data as usize - sk_buff.tail as usize;
+        // let mac_header_offset = headers.mac_header as usize;
+        let transport_header_offset = sk_buff.transport_header as usize;
 
-                // 读取数据
-                let data_ptr = sk_buff.data as *mut u8;
-                if transport_header_offset > 0 {
+        // 计算 MAC 头部指针
+        let mac_header_ptr = unsafe { head.add(sk_buff.mac_header as usize) } as *const EthHdr;
+        // let mac_header_ptr = unsafe { sk_buff.mac_header } as *const EthHdr;
+
+        // 读取以太网头部
+        let eth_hdr = unsafe { bpf_probe_read(mac_header_ptr).unwrap() };
+
+        // 根据协议类型处理不同的逻辑
+        match eth_hdr.ether_type {
+            EtherType::Ipv4 => {
+                info!(&ctx, "kernal This is an IPv4 packet.protocol {} ", protocol);
+                if let Some(mut entry) = unsafe { RINGBUF_MAP.reserve::<PacketData>(0) } {
+                    // 处理 IPv4 协议的逻辑
+                    let packet_data: *mut PacketData = entry.as_mut_ptr();
+
+                    // 计算网络层头部指针
+                    let network_header_ptr =
+                        // sk_buff.network_header as *const Ipv4Hdr;
+                        unsafe { head.add(network_header_offset) } as *const Ipv4Hdr;
+
+                    // 读取 IPv4 头部
+                    let ipv4_hdr = unsafe { bpf_probe_read(network_header_ptr).unwrap() };
+
+                    // 读取数据
+                    // let data_ptr = (*sk_buff).data as *mut u8;
+                    // if transport_header_offset > 0 {
                     let transport_head_ptr = unsafe { head.add(transport_header_offset) };
+                    // let transport_head_ptr = sk_buff.transport_header;
                     match ipv4_hdr.proto {
                         IpProto::Tcp => {
                             let transport_head_ptr = transport_head_ptr as *const TcpHdr;
+                            // let transport_head_ptr = transport_head_ptr as *const TcpHdr;
                             unsafe {
                                 (*packet_data).tcp_hdr =
                                     Some(bpf_probe_read(transport_head_ptr).unwrap());
@@ -164,188 +190,325 @@ fn try_kfree_skb(ctx: TracePointContext) -> Result<u32, ()> {
 
                         _ => {}
                     }
-                }
-                // 将数据写入 Ring Buffer
-                unsafe {
-                    (*packet_data).tgid = tgid;
-                    (*packet_data).pid = pid;
-                    // (*packet_data).reason = reason;
-                    (*packet_data).data_len = data_len;
-                    (*packet_data).protocol = protocol;
-                    (*packet_data).ipv4_hdr = Some(ipv4_hdr);
-                    (*packet_data).ipv6_hdr = None;
-                    bpf_probe_read_buf(data_ptr, (*packet_data).data.as_mut()).unwrap();
-                }
-                entry.submit(0);
-            }
-        }
-        EtherType::Ipv6 => {
-            info!(&ctx, "kernal This is an IPv6 packet.");
-            let network_header_offset = headers.network_header as usize;
-            let network_header_ptr = unsafe { head.add(network_header_offset) };
-
-            // 处理 IPv6 协议的逻辑
-            let ipv6_hdr = unsafe { bpf_probe_read(network_header_ptr as *const Ipv6Hdr).unwrap() };
-            // let src_addr = unsafe { ipv6_hdr.src_addr.in6_u.u6_addr8 };
-            // let dst_addr = unsafe { ipv6_hdr.dst_addr.in6_u.u6_addr8 };
-            let data_ptr = sk_buff.data as *mut u8;
-            // 将数据写入 Ring Buffer
-            if let Some(mut entry) = unsafe { RINGBUF_MAP.reserve::<PacketData>(0) } {
-                // *entry = mem::MaybeUninit::new(packet_data);
-                unsafe {
-                    let packet_data: *mut PacketData = entry.as_mut_ptr();
-                    // (*packet_data).reason = reason;
-                    (*packet_data).data_len = data_len;
-                    (*packet_data).protocol = protocol;
-                    (*packet_data).ipv4_hdr = None;
-                    (*packet_data).ipv6_hdr = Some(ipv6_hdr);
-                    bpf_probe_read_buf(data_ptr, (*packet_data).data.as_mut()).unwrap();
-                }
-
-                entry.submit(0);
-            }
-        }
-        EtherType::Arp => {
-            info!(&ctx, "kernal This is an ARP packet.");
-            // 处理 ARP 协议的逻辑 因为不太关注这个所以暂时忽略
-        }
-        _ => {
-            info!(&ctx, "kernal This is an unknown protocol {} ",protocol);
-            // 处理其他情况
-        } // };
-    }
-    Ok(0)
-}
-
-
-fn btf_try_kfree_skb(ctx: BtfTracePointContext) -> Result<u32, ()> {
-    info!(&ctx, "kernal function kfree_skb called");
-    let pid = ctx.pid();
-    let tgid = ctx.tgid();
-    // let command=ctx.command().unwrap_or_default();
-    let raw = ctx
-        .as_ptr()
-        .cast::<projectebpf_common::vmlinux::trace_event_raw_kfree_skb>();
-    // unsafe {
-    let trace_kfree = unsafe { bpf_probe_read(raw).unwrap() };
-    //  let trace_kfree= raw.read();
-    // let reason = trace_kfree.reason;
-    let sk_buff = trace_kfree
-        .skbaddr
-        .cast::<projectebpf_common::vmlinux::sk_buff>();
-    let sk_buff = unsafe { bpf_probe_read(sk_buff).unwrap() };
-    let headers = unsafe { sk_buff.__bindgen_anon_5.headers.as_ref() };
-    let protocol = headers.protocol;
-    // 获取 network_header 偏移量
-    let network_header_offset = headers.network_header as usize;
-    let data_len = sk_buff.data_len;
-    // let mac_header = headers.mac_header;
-    let mac_len = sk_buff.mac_len;
-
-    // 获取 head 和 mac_header 偏移量
-    let head = sk_buff.head as *const u8;
-    // let data_porint_len = sk_buff.data as usize - sk_buff.tail as usize;
-    let mac_header_offset = headers.mac_header as usize;
-    let transport_header_offset = headers.transport_header as usize;
-
-
-    // 计算 MAC 头部指针
-    let mac_header_ptr = unsafe { head.add(mac_header_offset) } as *const EthHdr;
-
-    // 读取以太网头部
-    let eth_hdr = unsafe { bpf_probe_read(mac_header_ptr).unwrap() };
-
-    // 根据协议类型处理不同的逻辑
-    match eth_hdr.ether_type {
-        EtherType::Ipv4 => {
-            info!(&ctx, "kernal This is an IPv4 packet.");
-            if let Some(mut entry) = unsafe { RINGBUF_MAP.reserve::<PacketData>(0) } {
-                // 处理 IPv4 协议的逻辑
-                let packet_data: *mut PacketData = entry.as_mut_ptr();
-
-                // 计算网络层头部指针
-                let network_header_ptr =
-                    unsafe { head.add(network_header_offset) } as *const Ipv4Hdr;
-
-                // 读取 IPv4 头部
-                let ipv4_hdr = unsafe { bpf_probe_read(network_header_ptr).unwrap() };
-
-                // 读取数据
-                let data_ptr = sk_buff.data as *mut u8;
-                if transport_header_offset > 0 {
-                    let transport_head_ptr = unsafe { head.add(transport_header_offset) };
-                    match ipv4_hdr.proto {
-                        IpProto::Tcp => {
-                            let transport_head_ptr = transport_head_ptr as *const TcpHdr;
-                            unsafe {
-                                (*packet_data).tcp_hdr =
-                                    Some(bpf_probe_read(transport_head_ptr).unwrap());
-                                (*packet_data).udp_hdr = None;
-                            }
-                        }
-                        IpProto::Udp => {
-                            let transport_head_ptr = transport_head_ptr as *const UdpHdr;
-                            unsafe {
-                                (*packet_data).tcp_hdr = None;
-                                (*packet_data).udp_hdr =
-                                    Some(bpf_probe_read(transport_head_ptr).unwrap());
-                            }
-                        }
-
-                        _ => {}
+                    // }
+                    // 将数据写入 Ring Buffer
+                    unsafe {
+                        (*packet_data).tgid = tgid;
+                        (*packet_data).pid = pid;
+                        // (*packet_data).reason = reason;
+                        (*packet_data).data_len = data_len;
+                        (*packet_data).protocol = protocol;
+                        (*packet_data).ipv4_hdr = Some(ipv4_hdr);
+                        (*packet_data).ipv6_hdr = None;
+                        // bpf_probe_read_buf(data_ptr, (*packet_data).data.as_mut()).unwrap();
                     }
+                    entry.submit(0);
                 }
+            }
+            EtherType::Ipv6 => {
+                info!(&ctx, "kernal This is an IPv6 packet.");
+                // let network_header_offset = headers.network_header as usize;
+                let network_header_ptr = unsafe { head.add(network_header_offset) };
+                // let network_header_ptr = sk_buff.network_header;
+
+                // 处理 IPv6 协议的逻辑
+                let ipv6_hdr =
+                    unsafe { bpf_probe_read(network_header_ptr as *const Ipv6Hdr).unwrap() };
+                // let src_addr = unsafe { ipv6_hdr.src_addr.in6_u.u6_addr8 };
+                // let dst_addr = unsafe { ipv6_hdr.dst_addr.in6_u.u6_addr8 };
+                // let data_ptr = sk_buff.data as *mut u8;
                 // 将数据写入 Ring Buffer
-                unsafe {
-                    (*packet_data).tgid = tgid;
-                    (*packet_data).pid = pid;
-                    // (*packet_data).reason = reason;
-                    (*packet_data).data_len = data_len;
-                    (*packet_data).protocol = protocol;
-                    (*packet_data).ipv4_hdr = Some(ipv4_hdr);
-                    (*packet_data).ipv6_hdr = None;
-                    bpf_probe_read_buf(data_ptr, (*packet_data).data.as_mut()).unwrap();
-                }
-                entry.submit(0);
-            }
-        }
-        EtherType::Ipv6 => {
-            info!(&ctx, "kernal This is an IPv6 packet.");
-            let network_header_offset = headers.network_header as usize;
-            let network_header_ptr = unsafe { head.add(network_header_offset) };
+                if let Some(mut entry) = unsafe { RINGBUF_MAP.reserve::<PacketData>(0) } {
+                    // *entry = mem::MaybeUninit::new(packet_data);
+                    unsafe {
+                        let packet_data: *mut PacketData = entry.as_mut_ptr();
+                        // (*packet_data).reason = reason;
+                        (*packet_data).data_len = data_len;
+                        (*packet_data).protocol = protocol;
+                        (*packet_data).ipv4_hdr = None;
+                        (*packet_data).ipv6_hdr = Some(ipv6_hdr);
+                        // bpf_probe_read_buf(data_ptr, (*packet_data).data.as_mut()).unwrap();
+                    }
 
-            // 处理 IPv6 协议的逻辑
-            let ipv6_hdr = unsafe { bpf_probe_read(network_header_ptr as *const Ipv6Hdr).unwrap() };
-            // let src_addr = unsafe { ipv6_hdr.src_addr.in6_u.u6_addr8 };
-            // let dst_addr = unsafe { ipv6_hdr.dst_addr.in6_u.u6_addr8 };
-            let data_ptr = sk_buff.data as *mut u8;
-            // 将数据写入 Ring Buffer
-            if let Some(mut entry) = unsafe { RINGBUF_MAP.reserve::<PacketData>(0) } {
-                // *entry = mem::MaybeUninit::new(packet_data);
-                unsafe {
-                    let packet_data: *mut PacketData = entry.as_mut_ptr();
-                    // (*packet_data).reason = reason;
-                    (*packet_data).data_len = data_len;
-                    (*packet_data).protocol = protocol;
-                    (*packet_data).ipv4_hdr = None;
-                    (*packet_data).ipv6_hdr = Some(ipv6_hdr);
-                    bpf_probe_read_buf(data_ptr, (*packet_data).data.as_mut()).unwrap();
+                    entry.submit(0);
                 }
-
-                entry.submit(0);
             }
+            EtherType::Arp => {
+                info!(&ctx, "kernal This is an ARP packet.");
+                // 处理 ARP 协议的逻辑 因为不太关注这个所以暂时忽略
+            }
+            _ => {
+                info!(&ctx, "kernal This is an unknown protocol {} ", protocol);
+                // 处理其他情况
+            } // };
         }
-        EtherType::Arp => {
-            info!(&ctx, "kernal This is an ARP packet.");
-            // 处理 ARP 协议的逻辑 因为不太关注这个所以暂时忽略
-        }
-        _ => {
-            info!(&ctx, "kernal This is an unknown protocol {} ",protocol);
-            // 处理其他情况
-        } // };
     }
     Ok(0)
 }
+
+// fn try_kfree_skb(ctx: TracePointContext) -> Result<u32, ()> {
+//     // info!(&ctx, "kernal function kfree_skb called");
+//     let pid = ctx.pid();
+//     let tgid = ctx.tgid();
+//     // let command=ctx.command().unwrap_or_default();
+//     let raw = ctx
+//         .as_ptr()
+//         .cast::<projectebpf_common::vmlinux::trace_event_raw_kfree_skb>();
+//     // unsafe {
+//     // let trace_kfree = unsafe { bpf_probe_read(raw).unwrap() };
+//     let trace_kfree = unsafe { *raw };
+//     //  let trace_kfree= raw.read();
+//     // let reason = trace_kfree.reason;
+//     let sk_buff = trace_kfree
+//         .skbaddr
+//         .cast::<projectebpf_common::vmlinux::sk_buff>();
+
+//     // let sk_buff = unsafe { bpf_probe_read(sk_buff).unwrap() };
+//     let sk_buff = unsafe {
+//         btf_read(sk_buff as *const c_void) as *const projectebpf_common::vmlinux::sk_buff
+//     };
+//     let headers = unsafe { (*sk_buff).__bindgen_anon_5.headers.as_ref() };
+//     let protocol = headers.protocol;
+//     // 获取 network_header 偏移量
+//     let network_header_offset = headers.network_header as usize;
+//     unsafe {
+//         let data_len = (*sk_buff).data_len;
+//         // let mac_header = headers.mac_header;
+//         let mac_len = (*sk_buff).mac_len;
+
+//         // 获取 head 和 mac_header 偏移量
+//         let head = (*sk_buff).head as *const u8;
+//         // let data_porint_len = sk_buff.data as usize - sk_buff.tail as usize;
+//         let mac_header_offset = headers.mac_header as usize;
+//         let transport_header_offset = headers.transport_header as usize;
+
+//         // 计算 MAC 头部指针
+//         let mac_header_ptr = unsafe { head.add(mac_header_offset) } as *const EthHdr;
+
+//         // 读取以太网头部
+//         let eth_hdr = unsafe { bpf_probe_read(mac_header_ptr).unwrap() };
+
+//         // 根据协议类型处理不同的逻辑
+//         match eth_hdr.ether_type {
+//             EtherType::Ipv4 => {
+//                 info!(&ctx, "kernal This is an IPv4 packet.");
+//                 if let Some(mut entry) = unsafe { RINGBUF_MAP.reserve::<PacketData>(0) } {
+//                     // 处理 IPv4 协议的逻辑
+//                     let packet_data: *mut PacketData = entry.as_mut_ptr();
+
+//                     // 计算网络层头部指针
+//                     let network_header_ptr =
+//                         unsafe { head.add(network_header_offset) } as *const Ipv4Hdr;
+
+//                     // 读取 IPv4 头部
+//                     let ipv4_hdr = unsafe { bpf_probe_read(network_header_ptr).unwrap() };
+
+//                     // 读取数据
+//                     let data_ptr = (*sk_buff).data as *mut u8;
+//                     if transport_header_offset > 0 {
+//                         let transport_head_ptr = unsafe { head.add(transport_header_offset) };
+//                         match ipv4_hdr.proto {
+//                             IpProto::Tcp => {
+//                                 let transport_head_ptr = transport_head_ptr as *const TcpHdr;
+//                                 unsafe {
+//                                     (*packet_data).tcp_hdr =
+//                                         Some(bpf_probe_read(transport_head_ptr).unwrap());
+//                                     (*packet_data).udp_hdr = None;
+//                                 }
+//                             }
+//                             IpProto::Udp => {
+//                                 let transport_head_ptr = transport_head_ptr as *const UdpHdr;
+//                                 unsafe {
+//                                     (*packet_data).tcp_hdr = None;
+//                                     (*packet_data).udp_hdr =
+//                                         Some(bpf_probe_read(transport_head_ptr).unwrap());
+//                                 }
+//                             }
+
+//                             _ => {}
+//                         }
+//                     }
+//                     // 将数据写入 Ring Buffer
+//                     unsafe {
+//                         (*packet_data).tgid = tgid;
+//                         (*packet_data).pid = pid;
+//                         // (*packet_data).reason = reason;
+//                         (*packet_data).data_len = data_len;
+//                         (*packet_data).protocol = protocol;
+//                         (*packet_data).ipv4_hdr = Some(ipv4_hdr);
+//                         (*packet_data).ipv6_hdr = None;
+//                         // bpf_probe_read_buf(data_ptr, (*packet_data).data.as_mut()).unwrap();
+//                     }
+//                     entry.submit(0);
+//                 }
+//             }
+//             EtherType::Ipv6 => {
+//                 info!(&ctx, "kernal This is an IPv6 packet.");
+//                 let network_header_offset = headers.network_header as usize;
+//                 let network_header_ptr = unsafe { head.add(network_header_offset) };
+
+//                 // 处理 IPv6 协议的逻辑
+//                 let ipv6_hdr =
+//                     unsafe { bpf_probe_read(network_header_ptr as *const Ipv6Hdr).unwrap() };
+//                 // let src_addr = unsafe { ipv6_hdr.src_addr.in6_u.u6_addr8 };
+//                 // let dst_addr = unsafe { ipv6_hdr.dst_addr.in6_u.u6_addr8 };
+//                 let data_ptr = (*sk_buff).data as *mut u8;
+//                 // 将数据写入 Ring Buffer
+//                 if let Some(mut entry) = unsafe { RINGBUF_MAP.reserve::<PacketData>(0) } {
+//                     // *entry = mem::MaybeUninit::new(packet_data);
+//                     unsafe {
+//                         let packet_data: *mut PacketData = entry.as_mut_ptr();
+//                         // (*packet_data).reason = reason;
+//                         (*packet_data).data_len = data_len;
+//                         (*packet_data).protocol = protocol;
+//                         (*packet_data).ipv4_hdr = None;
+//                         (*packet_data).ipv6_hdr = Some(ipv6_hdr);
+//                         // bpf_probe_read_buf(data_ptr, (*packet_data).data.as_mut()).unwrap();
+//                     }
+
+//                     entry.submit(0);
+//                 }
+//             }
+//             EtherType::Arp => {
+//                 info!(&ctx, "kernal This is an ARP packet.");
+//                 // 处理 ARP 协议的逻辑 因为不太关注这个所以暂时忽略
+//             }
+//             _ => {
+//                 info!(&ctx, "kernal This is an unknown protocol {} ", protocol);
+//                 // 处理其他情况
+//             } // };
+//         }
+//     }
+//     Ok(0)
+// }
+
+// fn btf_try_kfree_skb(ctx: BtfTracePointContext) -> Result<u32, ()> {
+//     info!(&ctx, "kernal function kfree_skb called");
+//     let pid = ctx.pid();
+//     let tgid = ctx.tgid();
+//     // let command=ctx.command().unwrap_or_default();
+//     let raw = ctx
+//         .as_ptr()
+//         .cast::<projectebpf_common::vmlinux::trace_event_raw_kfree_skb>();
+//     // unsafe {
+//     let trace_kfree = unsafe { bpf_probe_read(raw).unwrap() };
+//     //  let trace_kfree= raw.read();
+//     // let reason = trace_kfree.reason;
+//     let sk_buff = trace_kfree
+//         .skbaddr
+//         .cast::<projectebpf_common::vmlinux::sk_buff>();
+//     let sk_buff = unsafe { bpf_probe_read(sk_buff).unwrap() };
+//     let headers = unsafe { sk_buff.__bindgen_anon_5.headers.as_ref() };
+//     let protocol = headers.protocol;
+//     // 获取 network_header 偏移量
+//     let network_header_offset = headers.network_header as usize;
+//     let data_len = sk_buff.data_len;
+//     // let mac_header = headers.mac_header;
+//     let mac_len = sk_buff.mac_len;
+
+//     // 获取 head 和 mac_header 偏移量
+//     let head = sk_buff.head as *const u8;
+//     // let data_porint_len = sk_buff.data as usize - sk_buff.tail as usize;
+//     let mac_header_offset = headers.mac_header as usize;
+//     let transport_header_offset = headers.transport_header as usize;
+
+//     // 计算 MAC 头部指针
+//     let mac_header_ptr = unsafe { head.add(mac_header_offset) } as *const EthHdr;
+
+//     // 读取以太网头部
+//     let eth_hdr = unsafe { bpf_probe_read(mac_header_ptr).unwrap() };
+
+//     // 根据协议类型处理不同的逻辑
+//     match eth_hdr.ether_type {
+//         EtherType::Ipv4 => {
+//             info!(&ctx, "kernal This is an IPv4 packet.");
+//             if let Some(mut entry) = unsafe { RINGBUF_MAP.reserve::<PacketData>(0) } {
+//                 // 处理 IPv4 协议的逻辑
+//                 let packet_data: *mut PacketData = entry.as_mut_ptr();
+
+//                 // 计算网络层头部指针
+//                 let network_header_ptr =
+//                     unsafe { head.add(network_header_offset) } as *const Ipv4Hdr;
+
+//                 // 读取 IPv4 头部
+//                 let ipv4_hdr = unsafe { bpf_probe_read(network_header_ptr).unwrap() };
+
+//                 // 读取数据
+//                 let data_ptr = sk_buff.data as *mut u8;
+//                 if transport_header_offset > 0 {
+//                     let transport_head_ptr = unsafe { head.add(transport_header_offset) };
+//                     match ipv4_hdr.proto {
+//                         IpProto::Tcp => {
+//                             let transport_head_ptr = transport_head_ptr as *const TcpHdr;
+//                             unsafe {
+//                                 (*packet_data).tcp_hdr =
+//                                     Some(bpf_probe_read(transport_head_ptr).unwrap());
+//                                 (*packet_data).udp_hdr = None;
+//                             }
+//                         }
+//                         IpProto::Udp => {
+//                             let transport_head_ptr = transport_head_ptr as *const UdpHdr;
+//                             unsafe {
+//                                 (*packet_data).tcp_hdr = None;
+//                                 (*packet_data).udp_hdr =
+//                                     Some(bpf_probe_read(transport_head_ptr).unwrap());
+//                             }
+//                         }
+
+//                         _ => {}
+//                     }
+//                 }
+//                 // 将数据写入 Ring Buffer
+//                 unsafe {
+//                     (*packet_data).tgid = tgid;
+//                     (*packet_data).pid = pid;
+//                     // (*packet_data).reason = reason;
+//                     (*packet_data).data_len = data_len;
+//                     (*packet_data).protocol = protocol;
+//                     (*packet_data).ipv4_hdr = Some(ipv4_hdr);
+//                     (*packet_data).ipv6_hdr = None;
+//                     // bpf_probe_read_buf(data_ptr, (*packet_data).data.as_mut()).unwrap();
+//                 }
+//                 entry.submit(0);
+//             }
+//         }
+//         EtherType::Ipv6 => {
+//             info!(&ctx, "kernal This is an IPv6 packet.");
+//             let network_header_offset = headers.network_header as usize;
+//             let network_header_ptr = unsafe { head.add(network_header_offset) };
+
+//             // 处理 IPv6 协议的逻辑
+//             let ipv6_hdr = unsafe { bpf_probe_read(network_header_ptr as *const Ipv6Hdr).unwrap() };
+//             // let src_addr = unsafe { ipv6_hdr.src_addr.in6_u.u6_addr8 };
+//             // let dst_addr = unsafe { ipv6_hdr.dst_addr.in6_u.u6_addr8 };
+//             let data_ptr = sk_buff.data as *mut u8;
+//             // 将数据写入 Ring Buffer
+//             if let Some(mut entry) = unsafe { RINGBUF_MAP.reserve::<PacketData>(0) } {
+//                 // *entry = mem::MaybeUninit::new(packet_data);
+//                 unsafe {
+//                     let packet_data: *mut PacketData = entry.as_mut_ptr();
+//                     // (*packet_data).reason = reason;
+//                     (*packet_data).data_len = data_len;
+//                     (*packet_data).protocol = protocol;
+//                     (*packet_data).ipv4_hdr = None;
+//                     (*packet_data).ipv6_hdr = Some(ipv6_hdr);
+//                     // bpf_probe_read_buf(data_ptr, (*packet_data).data.as_mut()).unwrap();
+//                 }
+
+//                 entry.submit(0);
+//             }
+//         }
+//         EtherType::Arp => {
+//             info!(&ctx, "kernal This is an ARP packet.");
+//             // 处理 ARP 协议的逻辑 因为不太关注这个所以暂时忽略
+//         }
+//         _ => {
+//             info!(&ctx, "kernal This is an unknown protocol {} ", protocol);
+//             // 处理其他情况
+//         } // };
+//     }
+//     Ok(0)
+// }
 
 fn try_tcp_drop(ctx: ProbeContext) -> Result<u32, u32> {
     info!(&ctx, "function tcp_drop called");
