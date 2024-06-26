@@ -32,7 +32,6 @@ use network_types::{
     udp::UdpHdr,
 };
 use projectebpf_common::{PacketData, MAX_STACK_RAWTP};
-use projectebpf_ebpf::read_sk_buff;
 
 // #[tracepoint]
 // pub fn projectebpf(ctx: TracePointContext) -> u32 {
